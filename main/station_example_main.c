@@ -153,13 +153,13 @@ static void http_request_task(void *pvParameters)
 {
     // Configure HTTP client
     esp_http_client_config_t config = {
-        .url = "http://192.168.1.8:5000/cazzo/300",    //response after 10 seconds
+        .url = "http://my-word-service.herokuapp.com/cazzo/28",
         .event_handler = _http_event_handler,
-        .timeout_ms = 305000,   //HTTP timeout after 15 seconds
+        .timeout_ms = 40000,
     };
     esp_http_client_handle_t client = esp_http_client_init(&config);
 
-    for (int i=0; i<10; i++) {
+    for (int i=0; i>=0; i++) {
         // Perform a GET
         ESP_LOGI(TAG, "Request number %d", i+1);
         esp_err_t err = esp_http_client_perform(client);
