@@ -43,6 +43,9 @@ const int WIFI_CONNECTED_BIT = BIT0;
 static EventGroupHandle_t s_response_event_group;
 const int RESPONSE_BIT = BIT0;
 
+/* Queue of button presses events */
+static xQueueHandle button_press_evt_queue = NULL;
+
 static const char *TAG = "wifi app";
 
 static int s_retry_num = 0;
@@ -237,6 +240,68 @@ static void http_request_task(void *pvParameters)
     vTaskDelete(NULL);
 }
 
+
+/**
+    Handle button press
+*/
+static void IRAM_ATTR gpio_isr_handler(void* arg)
+{
+    //uint32_t gpio_num = (uint32_t) arg;
+    //ESP_LOGI("button interrupt", "received button interrupt");
+    char shit = 0;
+    xQueueSendFromISR(button_press_evt_queue, &shit, NULL);
+}
+
+
+/**
+    Task sending a http request on button press
+*/
+#define GPIO_BUTTON_INPUT 18
+#define GPIO_BUTTON_INPUT_MASK (1ULL<<GPIO_BUTTON_INPUT)
+#define ESP_INTR_FLAG_DEFAULT 0
+static void button_press_task(void* arg)
+{
+    // Configure input pin to handle button press
+    gpio_config_t io_conf = {
+        .intr_type = GPIO_PIN_INTR_POSEDGE,  //interrupt of rising edge
+        .pin_bit_mask = GPIO_BUTTON_INPUT_MASK, //bit mask of the pins
+        .mode = GPIO_MODE_INPUT,             //set as input mode
+        .pull_up_en = 1,                     //enable pull-up mode
+    };
+    gpio_config(&io_conf);
+
+    // Register interrupt handler
+    gpio_install_isr_service(ESP_INTR_FLAG_DEFAULT);
+    gpio_isr_handler_add(GPIO_BUTTON_INPUT, gpio_isr_handler, NULL);
+
+    esp_err_t err;
+    // Init HTTP client
+    esp_http_client_config_t config = {
+        .url = "http://my-word-service.herokuapp.com/figa",
+        .event_handler = _http_event_handler,
+        .timeout_ms = 60000,
+    };
+    esp_http_client_handle_t client = esp_http_client_init(&config);
+
+    char shit;
+    for(;;) {
+        if(xQueueReceive(button_press_evt_queue, &shit, portMAX_DELAY)) {
+            ESP_LOGI("button task", "Received button press");
+
+            // Send HTTP request
+            err = esp_http_client_perform(client);
+            if (err == ESP_OK) {
+                ESP_LOGI("button task", "HTTP GET Status = %d, content_length = %d",
+                        esp_http_client_get_status_code(client),
+                        esp_http_client_get_content_length(client));
+            } else {
+                ESP_LOGE("button task", "HTTP GET request failed: %s", esp_err_to_name(err));
+                vTaskDelay(3000 / portTICK_PERIOD_MS);  //backoff time
+            }
+        }
+    }
+}
+
 #define BLINK_GPIO CONFIG_BLINK_GPIO
 /**
     LED task. It will blink when it is connecting to wifi, then turing off.
@@ -288,14 +353,16 @@ void app_main(void)
     };
     ESP_ERROR_CHECK( esp_pm_configure(&pm_config) );*/
 
-    // Initialize wifi connection event group
+    // Initialize wifi connection, response, button press event groups
     s_wifi_event_group = xEventGroupCreate();
-
-    // Initialize response event group
     s_response_event_group = xEventGroupCreate();
+    button_press_evt_queue = xQueueCreate(10, sizeof(char));
 
     // Start LED task
     xTaskCreate(&led_task, "led_task", 2048, NULL, 5, NULL);
+
+    // Start button press task
+    xTaskCreate(&button_press_task, "button_task", 8192, NULL, 5, NULL);
     
     ESP_LOGI(TAG, "wifi_init_sta started");
     wifi_init_sta();
