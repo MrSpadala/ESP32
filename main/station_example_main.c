@@ -27,9 +27,15 @@
    If you'd rather not, just change the below entries to strings with
    the config you want - ie #define EXAMPLE_WIFI_SSID "mywifissid"
 */
-#define EXAMPLE_ESP_WIFI_SSID      CONFIG_ESP_WIFI_SSID
-#define EXAMPLE_ESP_WIFI_PASS      CONFIG_ESP_WIFI_PASSWORD
+//#define EXAMPLE_ESP_WIFI_SSID      CONFIG_ESP_WIFI_SSID
+//#define EXAMPLE_ESP_WIFI_PASS      CONFIG_ESP_WIFI_PASSWORD
+#define EXAMPLE_ESP_WIFI_SSID      "DLink-755"
+#define EXAMPLE_ESP_WIFI_PASS      "F9E4BECE"
 #define EXAMPLE_ESP_MAXIMUM_RETRY  CONFIG_ESP_MAXIMUM_RETRY
+
+/* Leds */
+#define BLINK_GPIO CONFIG_BLINK_GPIO
+#define GPIO_BUTTON_INPUT 18
 
 /* FreeRTOS event group to signal when we are connected*/
 static EventGroupHandle_t s_wifi_event_group;
@@ -254,7 +260,6 @@ static void IRAM_ATTR gpio_isr_handler(void* arg)
 /**
     Task sending a http request on button press
 */
-#define GPIO_BUTTON_INPUT 18
 #define GPIO_BUTTON_INPUT_MASK (1ULL<<GPIO_BUTTON_INPUT)
 #define ESP_INTR_FLAG_DEFAULT 0
 static void button_press_task(void* arg)
@@ -285,6 +290,7 @@ static void button_press_task(void* arg)
     for(;;) {
         if(xQueueReceive(button_press_evt_queue, &shit, portMAX_DELAY)) {
             ESP_LOGI("button task", "Received button press");
+            gpio_set_level(BLINK_GPIO, 1);  //turn on led
 
             // Send HTTP request
             err = esp_http_client_perform(client);
@@ -296,11 +302,12 @@ static void button_press_task(void* arg)
                 ESP_LOGE("button task", "HTTP GET request failed: %s", esp_err_to_name(err));
                 vTaskDelay(3000 / portTICK_PERIOD_MS);  //backoff time
             }
+
+            gpio_set_level(BLINK_GPIO, 0);  //restore LED status
         }
     }
 }
 
-#define BLINK_GPIO CONFIG_BLINK_GPIO
 /**
     LED task. It will blink when it is connecting to wifi, then turing off.
     When a positive response is received by the server it will turn on
