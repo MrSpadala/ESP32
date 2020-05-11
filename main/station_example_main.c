@@ -10,6 +10,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/event_groups.h"
+#include "driver/gpio.h"
 #include "esp_system.h"
 #include "esp_wifi.h"
 #include "esp_pm.h"
@@ -32,10 +33,15 @@
 
 /* FreeRTOS event group to signal when we are connected*/
 static EventGroupHandle_t s_wifi_event_group;
+static int connected = 0;
 
 /* The event group allows multiple bits for each event, but we only care about one event 
  * - are we connected to the AP with an IP? */
 const int WIFI_CONNECTED_BIT = BIT0;
+
+/* Event group to signal when we receive a positive response from the server */
+static EventGroupHandle_t s_response_event_group;
+const int RESPONSE_BIT = BIT0;
 
 static const char *TAG = "wifi app";
 
@@ -64,6 +70,7 @@ static void conn_event_handler(void* arg, esp_event_base_t event_base,
     } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
         if (s_retry_num < EXAMPLE_ESP_MAXIMUM_RETRY) {
             esp_wifi_connect();
+            connected = 0;
             xEventGroupClearBits(s_wifi_event_group, WIFI_CONNECTED_BIT);
             s_retry_num++;
             ESP_LOGI(TAG, "retry to connect to the AP");
@@ -76,6 +83,7 @@ static void conn_event_handler(void* arg, esp_event_base_t event_base,
         s_retry_num = 0;
         
         // Sets bit to notify we have an IP assigned
+        connected = 1;
         xEventGroupSetBits(s_wifi_event_group, WIFI_CONNECTED_BIT);
     }
 }
@@ -86,8 +94,6 @@ static void conn_event_handler(void* arg, esp_event_base_t event_base,
 */
 void wifi_init_sta(void)
 {
-    s_wifi_event_group = xEventGroupCreate();
-
     tcpip_adapter_init();
 
     ESP_ERROR_CHECK(esp_event_loop_create_default());
@@ -122,6 +128,8 @@ void wifi_init_sta(void)
 /**
     Handles HTTP events
 */
+static int data_len;
+static char* data;
 esp_err_t _http_event_handler(esp_http_client_event_t *evt)
 {
     switch(evt->event_id) {
@@ -141,7 +149,17 @@ esp_err_t _http_event_handler(esp_http_client_event_t *evt)
             ESP_LOGD(TAG, "HTTP_EVENT_ON_DATA, len=%d", evt->data_len);
             if (!esp_http_client_is_chunked_response(evt->client)) {
                 // Write out data
-                printf("%.*s\n", evt->data_len, (char*)evt->data);
+                data_len = evt->data_len;
+                data = (char*)evt->data;
+                printf("%.*s\n", data_len, data);
+                if (data_len > 0) {
+                    if (data[0] == 'Y') {
+                        // Positive response, notify event group
+                        xEventGroupSetBits(s_response_event_group, RESPONSE_BIT);
+                    }
+                } else {
+                    ESP_LOGD(TAG, "empty response received");
+                }
             }
 
             break;
@@ -219,6 +237,37 @@ static void http_request_task(void *pvParameters)
     vTaskDelete(NULL);
 }
 
+#define BLINK_GPIO CONFIG_BLINK_GPIO
+/**
+    LED task. It will blink when it is connecting to wifi, then turing off.
+    When a positive response is received by the server it will turn on
+*/
+static void led_task(void *pvParameters)
+{
+    // Set up LED pin
+    ESP_LOGI("LED_task", "Setup leds and starting blink");
+    gpio_pad_select_gpio(CONFIG_BLINK_GPIO);
+    gpio_set_direction(CONFIG_BLINK_GPIO, GPIO_MODE_OUTPUT);
+
+    // Loop blink until wifi connection is successful
+    while (!connected) {
+        gpio_set_level(BLINK_GPIO, 1);
+        vTaskDelay(500 / portTICK_PERIOD_MS);
+        gpio_set_level(BLINK_GPIO, 0);
+        vTaskDelay(500 / portTICK_PERIOD_MS);
+    }
+    ESP_LOGI("LED_task", "Connected, stop blinking LED");
+
+    // If we are here, we are connected with the LED turned off.
+    // Now we wait for a positive response from the server
+    xEventGroupWaitBits(s_response_event_group, RESPONSE_BIT, true, true, portMAX_DELAY);
+
+    // Response received, turn on led and finish task
+    ESP_LOGI("LED_task", "Turn on LED and end task");
+    gpio_set_level(BLINK_GPIO, 1);
+    vTaskDelete(NULL);
+}
+
 
 
 void app_main(void)
@@ -238,6 +287,15 @@ void app_main(void)
             //.light_sleep_enable = true
     };
     ESP_ERROR_CHECK( esp_pm_configure(&pm_config) );*/
+
+    // Initialize wifi connection event group
+    s_wifi_event_group = xEventGroupCreate();
+
+    // Initialize response event group
+    s_response_event_group = xEventGroupCreate();
+
+    // Start LED task
+    xTaskCreate(&led_task, "led_task", 2048, NULL, 5, NULL);
     
     ESP_LOGI(TAG, "wifi_init_sta started");
     wifi_init_sta();

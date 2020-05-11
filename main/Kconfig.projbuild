@@ -19,6 +19,22 @@ menu "Wifi Configuration"
             Set the Maximum retry to avoid station reconnecting to the AP unlimited when the AP is really inexistent.
 endmenu
 
+menu "LED Configuration"
+
+    config BLINK_GPIO
+        int "Blink GPIO number"
+        range 0 34
+        default 5
+        help
+            GPIO number (IOxx) to blink on and off.
+
+            Some GPIOs are used for other purposes (flash connections, etc.) and cannot be used to blink.
+
+            GPIOs 35-39 are input-only so cannot be used as outputs.
+
+endmenu
+
+
 menu "Power Save Configuration"
 
     choice EXAMPLE_POWER_SAVE_MODE
