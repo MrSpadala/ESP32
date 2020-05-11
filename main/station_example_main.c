@@ -12,6 +12,7 @@
 #include "freertos/event_groups.h"
 #include "esp_system.h"
 #include "esp_wifi.h"
+#include "esp_pm.h"
 #include "esp_event.h"
 #include "esp_log.h"
 #include "nvs_flash.h"
@@ -39,6 +40,18 @@ const int WIFI_CONNECTED_BIT = BIT0;
 static const char *TAG = "wifi app";
 
 static int s_retry_num = 0;
+
+
+// Power saving modes
+#if CONFIG_EXAMPLE_POWER_SAVE_MIN_MODEM
+#define DEFAULT_PS_MODE WIFI_PS_MIN_MODEM
+#elif CONFIG_EXAMPLE_POWER_SAVE_MAX_MODEM
+#define DEFAULT_PS_MODE WIFI_PS_MAX_MODEM
+#elif CONFIG_EXAMPLE_POWER_SAVE_NONE
+#define DEFAULT_PS_MODE WIFI_PS_NONE
+#else
+#define DEFAULT_PS_MODE WIFI_PS_NONE
+#endif /*CONFIG_POWER_SAVE_MODEM*/
 
 /**
     Handle events regarding wifi connection and ip obtaining
@@ -100,6 +113,9 @@ void wifi_init_sta(void)
 
     // Wait for IP to be set
     xEventGroupWaitBits(s_wifi_event_group, WIFI_CONNECTED_BIT, true, true, portMAX_DELAY);
+
+    // Set wifi power save
+    esp_wifi_set_ps(DEFAULT_PS_MODE);
 }
 
 
@@ -214,6 +230,14 @@ void app_main(void)
       ret = nvs_flash_init();
     }
     ESP_ERROR_CHECK(ret);
+
+    // Set CPU power save  //not supported on my ESP32
+    /*esp_pm_config_esp32_t pm_config = {
+            .max_freq_mhz = CONFIG_EXAMPLE_MAX_CPU_FREQ_MHZ,
+            .min_freq_mhz = CONFIG_EXAMPLE_MIN_CPU_FREQ_MHZ,
+            //.light_sleep_enable = true
+    };
+    ESP_ERROR_CHECK( esp_pm_configure(&pm_config) );*/
     
     ESP_LOGI(TAG, "wifi_init_sta started");
     wifi_init_sta();
