@@ -246,8 +246,6 @@ static void http_request_task(void *pvParameters)
 */
 static void IRAM_ATTR gpio_isr_handler(void* arg)
 {
-    //uint32_t gpio_num = (uint32_t) arg;
-    //ESP_LOGI("button interrupt", "received button interrupt");
     char shit = 0;
     xQueueSendFromISR(button_press_evt_queue, &shit, NULL);
 }
