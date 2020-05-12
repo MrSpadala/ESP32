@@ -27,15 +27,15 @@
    If you'd rather not, just change the below entries to strings with
    the config you want - ie #define EXAMPLE_WIFI_SSID "mywifissid"
 */
-//#define EXAMPLE_ESP_WIFI_SSID      CONFIG_ESP_WIFI_SSID
-//#define EXAMPLE_ESP_WIFI_PASS      CONFIG_ESP_WIFI_PASSWORD
-#define EXAMPLE_ESP_WIFI_SSID      "DLink-755"
-#define EXAMPLE_ESP_WIFI_PASS      "F9E4BECE"
+#define EXAMPLE_ESP_WIFI_SSID      CONFIG_ESP_WIFI_SSID
+#define EXAMPLE_ESP_WIFI_PASS      CONFIG_ESP_WIFI_PASSWORD
 #define EXAMPLE_ESP_MAXIMUM_RETRY  CONFIG_ESP_MAXIMUM_RETRY
 
 /* Leds */
 #define BLINK_GPIO CONFIG_BLINK_GPIO
-#define GPIO_BUTTON_INPUT 18
+#define GPIO_BUTTON_1_INPUT 18
+#define GPIO_BUTTON_2_INPUT 2
+#define GPIO_BUTTON_INPUT_MASK ((1ULL<<GPIO_BUTTON_1_INPUT) | (1ULL<<GPIO_BUTTON_2_INPUT))
 
 /* FreeRTOS event group to signal when we are connected*/
 static EventGroupHandle_t s_wifi_event_group;
@@ -250,18 +250,19 @@ static void http_request_task(void *pvParameters)
 /**
     Handle button press
 */
-static void IRAM_ATTR gpio_isr_handler(void* arg)
+static void IRAM_ATTR gpio_isr_handler(void* _gpio_num)
 {
-    char shit = 0;
-    xQueueSendFromISR(button_press_evt_queue, &shit, NULL);
+    uint32_t gpio_num = (uint32_t) _gpio_num;
+    xQueueSendFromISR(button_press_evt_queue, &gpio_num, NULL);
 }
 
 
 /**
     Task sending a http request on button press
 */
-#define GPIO_BUTTON_INPUT_MASK (1ULL<<GPIO_BUTTON_INPUT)
 #define ESP_INTR_FLAG_DEFAULT 0
+#define URL_BUTTON_1 "http://my-word-service.herokuapp.com/figa/1"
+#define URL_BUTTON_2 "http://my-word-service.herokuapp.com/figa/2"
 static void button_press_task(void* arg)
 {
     // Configure input pin to handle button press
@@ -275,22 +276,32 @@ static void button_press_task(void* arg)
 
     // Register interrupt handler
     gpio_install_isr_service(ESP_INTR_FLAG_DEFAULT);
-    gpio_isr_handler_add(GPIO_BUTTON_INPUT, gpio_isr_handler, NULL);
+    gpio_isr_handler_add(GPIO_BUTTON_1_INPUT, gpio_isr_handler, (void*) GPIO_BUTTON_1_INPUT);
+    gpio_isr_handler_add(GPIO_BUTTON_2_INPUT, gpio_isr_handler, (void*) GPIO_BUTTON_2_INPUT);
 
     esp_err_t err;
-    // Init HTTP client
+    // Init HTTP client. URL will be set later depending on which button was pressed
     esp_http_client_config_t config = {
-        .url = "http://my-word-service.herokuapp.com/figa",
         .event_handler = _http_event_handler,
         .timeout_ms = 60000,
     };
     esp_http_client_handle_t client = esp_http_client_init(&config);
 
-    char shit;
+    uint32_t gpio_num;
     for(;;) {
-        if(xQueueReceive(button_press_evt_queue, &shit, portMAX_DELAY)) {
-            ESP_LOGI("button task", "Received button press");
-            gpio_set_level(BLINK_GPIO, 1);  //turn on led
+        if(xQueueReceive(button_press_evt_queue, &gpio_num, portMAX_DELAY)) {
+            // Check which button was pressed
+            if (gpio_num == GPIO_BUTTON_1_INPUT) {
+                esp_http_client_set_url(client, URL_BUTTON_1);
+            } else if (GPIO_BUTTON_2_INPUT) {
+                esp_http_client_set_url(client, URL_BUTTON_2);
+            } else {
+                ESP_LOGE("button task", "unexpected gpio num %d", gpio_num);
+                continue;
+            }
+
+            ESP_LOGI("button task", "Received button press from gpio %d", gpio_num);
+            gpio_set_level(BLINK_GPIO, 1);  //turn on status led
 
             // Send HTTP request
             err = esp_http_client_perform(client);
@@ -303,7 +314,7 @@ static void button_press_task(void* arg)
                 vTaskDelay(3000 / portTICK_PERIOD_MS);  //backoff time
             }
 
-            gpio_set_level(BLINK_GPIO, 0);  //restore LED status
+            gpio_set_level(BLINK_GPIO, 0);  //turn off status LED
         }
     }
 }
@@ -369,7 +380,7 @@ void app_main(void)
     // Initialize wifi connection, response, button press event groups
     s_wifi_event_group = xEventGroupCreate();
     s_response_event_group = xEventGroupCreate();
-    button_press_evt_queue = xQueueCreate(10, sizeof(char));
+    button_press_evt_queue = xQueueCreate(10, sizeof(uint32_t));
 
     // Start LED task
     xTaskCreate(&led_task, "led_task", 2048, NULL, 5, NULL);
