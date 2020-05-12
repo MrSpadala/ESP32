@@ -280,25 +280,25 @@ static void button_press_task(void* arg)
     gpio_isr_handler_add(GPIO_BUTTON_2_INPUT, gpio_isr_handler, (void*) GPIO_BUTTON_2_INPUT);
 
     esp_err_t err;
-    // Init HTTP client. URL will be set later depending on which button was pressed
+    uint32_t gpio_num;
+    // url will be set
     esp_http_client_config_t config = {
         .event_handler = _http_event_handler,
         .timeout_ms = 60000,
     };
-    esp_http_client_handle_t client = esp_http_client_init(&config);
 
-    uint32_t gpio_num;
     for(;;) {
         if(xQueueReceive(button_press_evt_queue, &gpio_num, portMAX_DELAY)) {
             // Check which button was pressed
             if (gpio_num == GPIO_BUTTON_1_INPUT) {
-                esp_http_client_set_url(client, URL_BUTTON_1);
+                config.url = URL_BUTTON_1;
             } else if (GPIO_BUTTON_2_INPUT) {
-                esp_http_client_set_url(client, URL_BUTTON_2);
+                config.url = URL_BUTTON_2;
             } else {
                 ESP_LOGE("button task", "unexpected gpio num %d", gpio_num);
                 continue;
             }
+            esp_http_client_handle_t client = esp_http_client_init(&config);
 
             ESP_LOGI("button task", "Received button press from gpio %d", gpio_num);
             gpio_set_level(BLINK_GPIO, 1);  //turn on status led
@@ -315,6 +315,7 @@ static void button_press_task(void* arg)
             }
 
             gpio_set_level(BLINK_GPIO, 0);  //turn off status LED
+            esp_http_client_cleanup(client);  //cleanup client
         }
     }
 }
