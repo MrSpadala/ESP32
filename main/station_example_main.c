@@ -328,13 +328,21 @@ static void led_task(void *pvParameters)
     }
     ESP_LOGI("LED_task", "Connected, stop blinking LED");
 
-    // If we are here, we are connected with the LED turned off.
-    // Now we wait for a positive response from the server
-    xEventGroupWaitBits(s_response_event_group, RESPONSE_BIT, true, true, portMAX_DELAY);
+    // Loop waiting positive response to server. The LED are turned off
+    // by pressing the button
+    while (1) {
+        // If we are here, we are connected with the LED turned off.
+        // Now we wait for a positive response from the server
+        xEventGroupWaitBits(s_response_event_group, RESPONSE_BIT, true, true, portMAX_DELAY);
 
-    // Response received, turn on led and finish task
-    ESP_LOGI("LED_task", "Turn on LED and end task");
-    gpio_set_level(BLINK_GPIO, 1);
+        // Response received, turn on led and finish task
+        ESP_LOGI("LED_task", "Positive response, turn on LED");
+        gpio_set_level(BLINK_GPIO, 1);
+
+        // Clear event bits for the next loop cycle
+        xEventGroupClearBits(s_response_event_group, RESPONSE_BIT);
+    }
+
     vTaskDelete(NULL);
 }
 
