@@ -1,11 +1,4 @@
-/* WiFi station Example
 
-   This example code is in the Public Domain (or CC0 licensed, at your option.)
-
-   Unless required by applicable law or agreed to in writing, this
-   software is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR
-   CONDITIONS OF ANY KIND, either express or implied.
-*/
 #include <string.h>
 #include <stdbool.h>
 #include "freertos/FreeRTOS.h"
@@ -23,11 +16,6 @@
 #include "lwip/err.h"
 #include "lwip/sys.h"
 
-/* The examples use WiFi configuration that you can set via project configuration menu
-
-   If you'd rather not, just change the below entries to strings with
-   the config you want - ie #define EXAMPLE_WIFI_SSID "mywifissid"
-*/
 #define EXAMPLE_ESP_WIFI_SSID      CONFIG_ESP_WIFI_SSID
 #define EXAMPLE_ESP_WIFI_PASS      CONFIG_ESP_WIFI_PASSWORD
 #define EXAMPLE_ESP_MAXIMUM_RETRY  CONFIG_ESP_MAXIMUM_RETRY
@@ -38,13 +26,18 @@
 #define GPIO_BUTTON_2_INPUT 2
 #define GPIO_BUTTON_INPUT_MASK ((1ULL<<GPIO_BUTTON_1_INPUT) | (1ULL<<GPIO_BUTTON_2_INPUT))
 
+/* URLs */
+#define URL_DEFAULT "http://my-word-service.herokuapp.com"
+#define URL_BLINK "http://my-word-service.herokuapp.com/cazzo/28"
+#define URL_BUTTON_1 "http://my-word-service.herokuapp.com/figa/1"
+#define URL_BUTTON_2 "http://my-word-service.herokuapp.com/figa/2"
+
+
 /* FreeRTOS event group to signal when we are connected*/
 static EventGroupHandle_t s_wifi_event_group;
-static int connected = 0;
-
-/* The event group allows multiple bits for each event, but we only care about one event 
- * - are we connected to the AP with an IP? */
 const int WIFI_CONNECTED_BIT = BIT0;
+static bool connected = false;
+static int s_retry_num = 0;   //number of connection tries 
 
 /* Event group to signal when we receive a positive response from the server */
 static EventGroupHandle_t s_response_event_group;
@@ -52,10 +45,14 @@ const int RESPONSE_BIT = BIT0;
 
 /* Queue of button presses events */
 static xQueueHandle button_press_evt_queue = NULL;
+// Struct containing information about the button press, set by the interrupt handler
+// It will set inside button_press_evt_queue
+typedef struct {
+    uint32_t gpio_num;
+    TickType_t tick;
+} press_info_t;
 
 static const char *TAG = "wifi app";
-
-static int s_retry_num = 0;
 
 
 // Power saving modes
@@ -80,7 +77,7 @@ static void conn_event_handler(void* arg, esp_event_base_t event_base,
     } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
         if (s_retry_num < EXAMPLE_ESP_MAXIMUM_RETRY) {
             esp_wifi_connect();
-            connected = 0;
+            connected = false;
             xEventGroupClearBits(s_wifi_event_group, WIFI_CONNECTED_BIT);
             s_retry_num++;
             ESP_LOGI(TAG, "retry to connect to the AP");
@@ -93,7 +90,7 @@ static void conn_event_handler(void* arg, esp_event_base_t event_base,
         s_retry_num = 0;
         
         // Sets bit to notify we have an IP assigned
-        connected = 1;
+        connected = true;
         xEventGroupSetBits(s_wifi_event_group, WIFI_CONNECTED_BIT);
     }
 }
@@ -196,7 +193,6 @@ esp_err_t _http_event_handler(esp_http_client_event_t *evt)
 esp_http_client_handle_t client;
 
 // Utility function to init http client
-#define URL_DEFAULT "http://my-word-service.herokuapp.com"
 static esp_http_client_handle_t init_client_http(char* url) {
     ESP_LOGI("http client", "HTTP client init");
     esp_http_client_config_t config = {
@@ -210,7 +206,6 @@ static esp_http_client_handle_t init_client_http(char* url) {
 /**
     Loops long polling requests to server.
 */
-#define URL_BLINK "http://my-word-service.herokuapp.com/cazzo/28"
 static void http_request_task(void *pvParameters)
 {
     esp_err_t err;
@@ -235,11 +230,6 @@ static void http_request_task(void *pvParameters)
 }
 
 
-// Struct containing information about the button press, set by the interrupt handler
-typedef struct {
-    uint32_t gpio_num;
-    TickType_t tick;
-} press_info_t;
 
 /**
     Handle button press
@@ -257,8 +247,6 @@ static void IRAM_ATTR gpio_isr_handler(void* _gpio_num)
     Task sending a http request on button press
 */
 #define ESP_INTR_FLAG_DEFAULT 0
-#define URL_BUTTON_1 "http://my-word-service.herokuapp.com/figa/1"
-#define URL_BUTTON_2 "http://my-word-service.herokuapp.com/figa/2"
 #define MIN_DELTA_TICKS (250 / portTICK_PERIOD_MS)   //minimum number of milliseconds between button presses (avoid debounce)
 static void button_press_task(void* arg)
 {
