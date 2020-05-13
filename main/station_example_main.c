@@ -247,13 +247,21 @@ static void http_request_task(void *pvParameters)
 }
 
 
+// Struct containing information about the button press, set by the interrupt handler
+typedef struct {
+    uint32_t gpio_num;
+    TickType_t tick;
+} press_info_t;
+
 /**
     Handle button press
 */
 static void IRAM_ATTR gpio_isr_handler(void* _gpio_num)
 {
-    uint32_t gpio_num = (uint32_t) _gpio_num;
-    xQueueSendFromISR(button_press_evt_queue, &gpio_num, NULL);
+    press_info_t info;
+    info.gpio_num = (uint32_t) _gpio_num;
+    info.tick = xTaskGetTickCountFromISR();
+    xQueueSendFromISR(button_press_evt_queue, &info, NULL);
 }
 
 
@@ -263,14 +271,19 @@ static void IRAM_ATTR gpio_isr_handler(void* _gpio_num)
 #define ESP_INTR_FLAG_DEFAULT 0
 #define URL_BUTTON_1 "http://my-word-service.herokuapp.com/figa/1"
 #define URL_BUTTON_2 "http://my-word-service.herokuapp.com/figa/2"
+#define MIN_DELTA_TICKS (500 / portTICK_PERIOD_MS)   //minimum number of milliseconds between button presses
 static void button_press_task(void* arg)
 {
+    esp_err_t err;
+    TickType_t last_tick = xTaskGetTickCount();
+    press_info_t info;
+
     // Configure input pin to handle button press
     gpio_config_t io_conf = {
         .intr_type = GPIO_PIN_INTR_POSEDGE,  //interrupt of rising edge
         .pin_bit_mask = GPIO_BUTTON_INPUT_MASK, //bit mask of the pins
         .mode = GPIO_MODE_INPUT,             //set as input mode
-        .pull_up_en = 1,                     //enable pull-up mode
+        .pull_down_en = 1,                     //enable pull-down mode
     };
     gpio_config(&io_conf);
 
@@ -278,29 +291,40 @@ static void button_press_task(void* arg)
     gpio_install_isr_service(ESP_INTR_FLAG_DEFAULT);
     gpio_isr_handler_add(GPIO_BUTTON_1_INPUT, gpio_isr_handler, (void*) GPIO_BUTTON_1_INPUT);
     gpio_isr_handler_add(GPIO_BUTTON_2_INPUT, gpio_isr_handler, (void*) GPIO_BUTTON_2_INPUT);
-
-    esp_err_t err;
-    uint32_t gpio_num;
-    // url will be set
-    esp_http_client_config_t config = {
+    
+    // Configuration and initialization of HTTP clients, url will be set accordingly on button press
+    esp_http_client_config_t config_default = {
+        .url = URL_BUTTON_1, //url placeholder
         .event_handler = _http_event_handler,
         .timeout_ms = 60000,
     };
+    esp_http_client_handle_t client = esp_http_client_init(&config_default);
 
     for(;;) {
-        if(xQueueReceive(button_press_evt_queue, &gpio_num, portMAX_DELAY)) {
+        if(xQueueReceive(button_press_evt_queue, &info, portMAX_DELAY)) {
             // Check which button was pressed
-            if (gpio_num == GPIO_BUTTON_1_INPUT) {
-                config.url = URL_BUTTON_1;
-            } else if (GPIO_BUTTON_2_INPUT) {
-                config.url = URL_BUTTON_2;
+            if (info.gpio_num == GPIO_BUTTON_1_INPUT) {
+                esp_http_client_set_url(client, URL_BUTTON_1);
+            } else if (info.gpio_num == GPIO_BUTTON_2_INPUT) {
+                esp_http_client_set_url(client, URL_BUTTON_2);
             } else {
-                ESP_LOGE("button task", "unexpected gpio num %d", gpio_num);
+                ESP_LOGE("button task", "unexpected gpio num %d", info.gpio_num);
                 continue;
             }
-            esp_http_client_handle_t client = esp_http_client_init(&config);
 
-            ESP_LOGI("button task", "Received button press from gpio %d", gpio_num);
+            // Check the timestamp difference to discard close events if they are too close
+            if (info.tick - last_tick < MIN_DELTA_TICKS) {
+                ESP_LOGI("button task", "rejected event pin %d at tick %d", info.gpio_num, info.tick);
+                continue;
+            } else {
+                ESP_LOGI("button task", "accepted event pin %d at tick %d", info.gpio_num, info.tick);
+            }
+            last_tick = info.tick;
+
+            // Init HTTP client
+            //esp_http_client_handle_t client = esp_http_client_init(&config);
+
+            //ESP_LOGI("button task", "Received button press from gpio %d", info.gpio_num);
             gpio_set_level(BLINK_GPIO, 1);  //turn on status led
 
             // Send HTTP request
@@ -312,10 +336,12 @@ static void button_press_task(void* arg)
             } else {
                 ESP_LOGE("button task", "HTTP GET request failed: %s", esp_err_to_name(err));
                 vTaskDelay(3000 / portTICK_PERIOD_MS);  //backoff time
+                esp_http_client_cleanup(client);  //cleanup client
+                client = esp_http_client_init(&config_default); //restart client
+                xQueueSendToFront(button_press_evt_queue, &info, 0); //put event again in queue
             }
 
             gpio_set_level(BLINK_GPIO, 0);  //turn off status LED
-            esp_http_client_cleanup(client);  //cleanup client
         }
     }
 }
@@ -381,7 +407,7 @@ void app_main(void)
     // Initialize wifi connection, response, button press event groups
     s_wifi_event_group = xEventGroupCreate();
     s_response_event_group = xEventGroupCreate();
-    button_press_evt_queue = xQueueCreate(10, sizeof(uint32_t));
+    button_press_evt_queue = xQueueCreate(10, sizeof(press_info_t));
 
     // Start LED task
     xTaskCreate(&led_task, "led_task", 2048, NULL, 5, NULL);
