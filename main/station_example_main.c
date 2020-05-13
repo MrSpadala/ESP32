@@ -216,29 +216,22 @@ static void http_request_task(void *pvParameters)
     esp_err_t err;
     esp_http_client_handle_t client = init_client_http(URL_BLINK);
 
-    while (1) {
-        // Set header to keep alive connection to heroku
-        //esp_http_client_set_header(client, "connection", "keep-alive");
-
-        // Loop long polling requests forever using the same connection
-        for (int i=0; i>=0; i++) {
-            // Perform a GET
-            ESP_LOGI(TAG, "Request number %d", i+1);
-            err = esp_http_client_perform(client);
-            if (err == ESP_OK) {
-                ESP_LOGI(TAG, "HTTP GET Status = %d, content_length = %d",
-                        esp_http_client_get_status_code(client),
-                        esp_http_client_get_content_length(client));
-            } else {
-                ESP_LOGE(TAG, "HTTP GET request failed: %s", esp_err_to_name(err));
-                esp_http_client_cleanup(client);
-                client = init_client_http(URL_BLINK);
-                vTaskDelay(3000 / portTICK_PERIOD_MS);  //backoff time
-                // In case of error reset HTTP client and retry
-                break;
-            }
-        }        
-    }
+    // Loop long polling requests forever using the same connection
+    for (int i=0; i>=0; i++) {
+        // Perform a GET
+        ESP_LOGI(TAG, "Request number %d", i+1);
+        err = esp_http_client_perform(client);
+        if (err == ESP_OK) {
+            ESP_LOGI(TAG, "HTTP GET Status = %d, content_length = %d",
+                    esp_http_client_get_status_code(client),
+                    esp_http_client_get_content_length(client));
+        } else {
+            ESP_LOGE(TAG, "HTTP GET request failed: %s", esp_err_to_name(err));
+            esp_http_client_cleanup(client);  //clean http client
+            client = init_client_http(URL_BLINK);  //init new http client
+            vTaskDelay(3000 / portTICK_PERIOD_MS);  //backoff time
+        }
+    }        
 }
 
 
