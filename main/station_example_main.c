@@ -7,6 +7,7 @@
    CONDITIONS OF ANY KIND, either express or implied.
 */
 #include <string.h>
+#include <stdbool.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/event_groups.h"
@@ -277,6 +278,7 @@ static void button_press_task(void* arg)
     esp_err_t err;
     TickType_t last_tick = xTaskGetTickCount();
     press_info_t info;
+    bool http_repeat = false;
 
     // Configure input pin to handle button press
     gpio_config_t io_conf = {
@@ -312,19 +314,20 @@ static void button_press_task(void* arg)
                 continue;
             }
 
-            // Check the timestamp difference to discard close events if they are too close
-            if (info.tick - last_tick < MIN_DELTA_TICKS) {
-                ESP_LOGI("button task", "rejected event pin %d at tick %d", info.gpio_num, info.tick);
-                continue;
+            // Check if this event failed previously, if yes skip next timestamp check
+            if (http_repeat) {
+                http_repeat = false;
             } else {
-                ESP_LOGI("button task", "accepted event pin %d at tick %d", info.gpio_num, info.tick);
+                // Check the timestamp difference to discard close events if they are too close (button debounce)
+                if (info.tick - last_tick < MIN_DELTA_TICKS) {
+                    ESP_LOGI("button task", "rejected event pin %d at tick %d", info.gpio_num, info.tick);
+                    continue;
+                } else {
+                    ESP_LOGI("button task", "accepted event pin %d at tick %d", info.gpio_num, info.tick);
+                    last_tick = info.tick;
+                }
             }
-            last_tick = info.tick;
 
-            // Init HTTP client
-            //esp_http_client_handle_t client = esp_http_client_init(&config);
-
-            //ESP_LOGI("button task", "Received button press from gpio %d", info.gpio_num);
             gpio_set_level(BLINK_GPIO, 1);  //turn on status led
 
             // Send HTTP request
@@ -339,6 +342,7 @@ static void button_press_task(void* arg)
                 esp_http_client_cleanup(client);  //cleanup client
                 client = esp_http_client_init(&config_default); //restart client
                 xQueueSendToFront(button_press_evt_queue, &info, 0); //put event again in queue
+                http_repeat = true;   //signal that the next event in queue should be repeated (skip timestamp check)
             }
 
             gpio_set_level(BLINK_GPIO, 0);  //turn off status LED
