@@ -192,38 +192,35 @@ esp_err_t _http_event_handler(esp_http_client_event_t *evt)
 }
 
 
+// HTTP client handle
+esp_http_client_handle_t client;
+
+// Utility function to init http client
+#define URL_DEFAULT "http://my-word-service.herokuapp.com"
+static esp_http_client_handle_t init_client_http(char* url) {
+    ESP_LOGI("http client", "HTTP client init");
+    esp_http_client_config_t config = {
+        .url = url,
+        .event_handler = _http_event_handler,
+        .timeout_ms = 60000,
+    };
+    return esp_http_client_init(&config);
+}
+
 /**
     Loops long polling requests to server.
 */
+#define URL_BLINK "http://my-word-service.herokuapp.com/cazzo/28"
 static void http_request_task(void *pvParameters)
 {
     esp_err_t err;
+    esp_http_client_handle_t client = init_client_http(URL_BLINK);
 
     while (1) {
-        // Configure HTTP client for first connection
-        esp_http_client_config_t config = {
-            .url = "http://my-word-service.herokuapp.com/cazzo/1",
-            .event_handler = _http_event_handler,
-            .timeout_ms = 60000,
-        };
-        esp_http_client_handle_t client = esp_http_client_init(&config);
         // Set header to keep alive connection to heroku
         //esp_http_client_set_header(client, "connection", "keep-alive");
-        
-        // Send first request
-        err = esp_http_client_perform(client);
-        if (err == ESP_OK) {
-            ESP_LOGI(TAG, "First HTTP request successful");
-        } else {
-            ESP_LOGE(TAG, "HTTP GET request failed: %s", esp_err_to_name(err));
-            vTaskDelay(3000 / portTICK_PERIOD_MS);  //backoff time
-            // In case of error reset HTTP client and try again
-            esp_http_client_cleanup(client);
-            continue;
-        }
 
         // Loop long polling requests forever using the same connection
-        esp_http_client_set_url(client, "http://my-word-service.herokuapp.com/cazzo/28");
         for (int i=0; i>=0; i++) {
             // Perform a GET
             ESP_LOGI(TAG, "Request number %d", i+1);
@@ -234,17 +231,14 @@ static void http_request_task(void *pvParameters)
                         esp_http_client_get_content_length(client));
             } else {
                 ESP_LOGE(TAG, "HTTP GET request failed: %s", esp_err_to_name(err));
+                esp_http_client_cleanup(client);
+                client = init_client_http(URL_BLINK);
                 vTaskDelay(3000 / portTICK_PERIOD_MS);  //backoff time
                 // In case of error reset HTTP client and retry
-                esp_http_client_cleanup(client);
                 break;
             }
         }        
     }
-
-    // Free RTOS task resources
-    ESP_LOGI(TAG, "Finish http request task");
-    vTaskDelete(NULL);
 }
 
 
@@ -272,13 +266,14 @@ static void IRAM_ATTR gpio_isr_handler(void* _gpio_num)
 #define ESP_INTR_FLAG_DEFAULT 0
 #define URL_BUTTON_1 "http://my-word-service.herokuapp.com/figa/1"
 #define URL_BUTTON_2 "http://my-word-service.herokuapp.com/figa/2"
-#define MIN_DELTA_TICKS (500 / portTICK_PERIOD_MS)   //minimum number of milliseconds between button presses
+#define MIN_DELTA_TICKS (250 / portTICK_PERIOD_MS)   //minimum number of milliseconds between button presses (avoid debounce)
 static void button_press_task(void* arg)
 {
     esp_err_t err;
     TickType_t last_tick = xTaskGetTickCount();
     press_info_t info;
     bool http_repeat = false;
+    esp_http_client_handle_t client = init_client_http(URL_DEFAULT);
 
     // Configure input pin to handle button press
     gpio_config_t io_conf = {
@@ -293,27 +288,9 @@ static void button_press_task(void* arg)
     gpio_install_isr_service(ESP_INTR_FLAG_DEFAULT);
     gpio_isr_handler_add(GPIO_BUTTON_1_INPUT, gpio_isr_handler, (void*) GPIO_BUTTON_1_INPUT);
     gpio_isr_handler_add(GPIO_BUTTON_2_INPUT, gpio_isr_handler, (void*) GPIO_BUTTON_2_INPUT);
-    
-    // Configuration and initialization of HTTP clients, url will be set accordingly on button press
-    esp_http_client_config_t config_default = {
-        .url = URL_BUTTON_1, //url placeholder
-        .event_handler = _http_event_handler,
-        .timeout_ms = 60000,
-    };
-    esp_http_client_handle_t client = esp_http_client_init(&config_default);
 
     for(;;) {
         if(xQueueReceive(button_press_evt_queue, &info, portMAX_DELAY)) {
-            // Check which button was pressed
-            if (info.gpio_num == GPIO_BUTTON_1_INPUT) {
-                esp_http_client_set_url(client, URL_BUTTON_1);
-            } else if (info.gpio_num == GPIO_BUTTON_2_INPUT) {
-                esp_http_client_set_url(client, URL_BUTTON_2);
-            } else {
-                ESP_LOGE("button task", "unexpected gpio num %d", info.gpio_num);
-                continue;
-            }
-
             // Check if this event failed previously, if yes skip next timestamp check
             if (http_repeat) {
                 http_repeat = false;
@@ -328,6 +305,16 @@ static void button_press_task(void* arg)
                 }
             }
 
+            // Check which button was pressed and change URL accordingly
+            if (info.gpio_num == GPIO_BUTTON_1_INPUT) {
+                esp_http_client_set_url(client, URL_BUTTON_1);
+            } else if (info.gpio_num == GPIO_BUTTON_2_INPUT) {
+                esp_http_client_set_url(client, URL_BUTTON_2);
+            } else {
+                ESP_LOGE("button task", "unexpected gpio num %d", info.gpio_num);
+                continue;
+            }
+            
             gpio_set_level(BLINK_GPIO, 1);  //turn on status led
 
             // Send HTTP request
@@ -338,9 +325,9 @@ static void button_press_task(void* arg)
                         esp_http_client_get_content_length(client));
             } else {
                 ESP_LOGE("button task", "HTTP GET request failed: %s", esp_err_to_name(err));
-                vTaskDelay(3000 / portTICK_PERIOD_MS);  //backoff time
                 esp_http_client_cleanup(client);  //cleanup client
-                client = esp_http_client_init(&config_default); //restart client
+                client = init_client_http(URL_DEFAULT); //restart client
+                vTaskDelay(3000 / portTICK_PERIOD_MS);  //backoff time
                 xQueueSendToFront(button_press_evt_queue, &info, 0); //put event again in queue
                 http_repeat = true;   //signal that the next event in queue should be repeated (skip timestamp check)
             }
@@ -384,8 +371,6 @@ static void led_task(void *pvParameters)
         // Clear event bits for the next loop cycle
         xEventGroupClearBits(s_response_event_group, RESPONSE_BIT);
     }
-
-    vTaskDelete(NULL);
 }
 
 
