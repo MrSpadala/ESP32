@@ -14,9 +14,50 @@ menu "Wifi Configuration"
 
     config ESP_MAXIMUM_RETRY
         int "Maximum retry"
-        default 5
+        default 1000000000
         help
             Set the Maximum retry to avoid station reconnecting to the AP unlimited when the AP is really inexistent.
+
+    choice ESP_WIFI_SCAN_AUTH_MODE_THRESHOLD
+        prompt "WiFi Scan auth mode threshold"
+        default ESP_WIFI_AUTH_OPEN
+        help
+            The weakest authmode to accept in the scan mode.
+
+        config ESP_WIFI_AUTH_OPEN
+            bool "OPEN"
+        config ESP_WIFI_AUTH_WEP
+            bool "WEP"
+        config ESP_WIFI_AUTH_WPA_PSK
+            bool "WPA PSK"
+        config ESP_WIFI_AUTH_WPA2_PSK
+            bool "WPA2 PSK"
+        config ESP_WIFI_AUTH_WPA_WPA2_PSK
+            bool "WPA/WPA2 PSK"
+        config ESP_WIFI_AUTH_WPA3_PSK
+            bool "WPA3 PSK"
+        config ESP_WIFI_AUTH_WPA2_WPA3_PSK
+            bool "WPA2/WPA3 PSK"
+        config ESP_WIFI_AUTH_WAPI_PSK
+            bool "WAPI PSK"
+    endchoice
+
+endmenu
+
+menu "Telegram bot configuration"
+
+    config TG_BOT_TOKEN
+        string "Telegram bot token"
+        default "asd123"
+        help
+            Token of the Telegram bot
+
+    config TG_TARGET_USERID
+        string "Telegram target user_id"
+        default "123456"
+        help
+            user_id of the Telegram user to send messages
+
 endmenu
 
 menu "LED Configuration"
