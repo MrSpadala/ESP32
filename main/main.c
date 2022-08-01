@@ -186,7 +186,7 @@ void wifi_init_sta(void)
 */
 static int data_len;
 static char* data;
-esp_err_t _http_event_handler(esp_http_client_event_t *evt)
+esp_err_t _http_event_handler(esp_http_client_event_t *evt, bool check_updates)
 {
     switch(evt->event_id) {
         case HTTP_EVENT_ERROR:
@@ -211,16 +211,18 @@ esp_err_t _http_event_handler(esp_http_client_event_t *evt)
                 ESP_LOGI(TAG, "%s", data);
 
                 // Get bot updates
-                int n_matches = sscanf(data, "{\"ok\":true,\"result\":[{\"update_id\":%u,\"message\":{\"message_id\":%u,\"from\":{\"id\":"CONFIG_TG_TARGET_USERID, &offset, NULL);
-                if (n_matches == 0) {
-                    ESP_LOGI(TAG, "No new update found");
-                } else if (n_matches == 1) {
-                    // update offset and signal positive response
-                    ESP_LOGI(TAG, "New update found");
-                    offset += 1;
-                    xEventGroupSetBits(s_response_event_group, RESPONSE_BIT);
-                } else {
-                    ESP_LOGE(TAG, "sscanf found two or more matches. This should not happen");
+                if (check_updates) {
+                    int n_matches = sscanf(data, "{\"ok\":true,\"result\":[{\"update_id\":%u,\"message\":{\"message_id\":%u,\"from\":{\"id\":"CONFIG_TG_TARGET_USERID, &offset, NULL);
+                    if (n_matches == 0) {
+                        ESP_LOGI(TAG, "No new update found");
+                    } else if (n_matches == 1) {
+                        // update offset and signal positive response
+                        ESP_LOGI(TAG, "New update found");
+                        offset += 1;
+                        xEventGroupSetBits(s_response_event_group, RESPONSE_BIT);
+                    } else {
+                        ESP_LOGE(TAG, "sscanf found two or more matches. This should not happen");
+                    }
                 }
             }
 
@@ -246,16 +248,23 @@ esp_err_t _http_event_handler(esp_http_client_event_t *evt)
     return ESP_OK;
 }
 
+esp_err_t _http_event_handler_upd(esp_http_client_event_t *evt) {
+    return _http_event_handler(evt, true);
+}
+esp_err_t _http_event_handler_no_upd(esp_http_client_event_t *evt) {
+    return _http_event_handler(evt, false);
+}
+
 
 // HTTP client handle
 esp_http_client_handle_t client;
 
 // Utility function to init http client
-static esp_http_client_handle_t init_client_http(char* url) {
+static esp_http_client_handle_t init_client_http(char* url, bool check_updates) {
     ESP_LOGI("http client", "HTTP client init");
     esp_http_client_config_t config = {
         .url = url,
-        .event_handler = _http_event_handler,
+        .event_handler = check_updates ? _http_event_handler_upd : _http_event_handler_no_upd,
         .timeout_ms = 60000,
     };
     return esp_http_client_init(&config);
@@ -267,7 +276,7 @@ static esp_http_client_handle_t init_client_http(char* url) {
 static void http_request_task(void *pvParameters)
 {
     esp_err_t err;
-    esp_http_client_handle_t client = init_client_http(TG_BASE_URL);
+    esp_http_client_handle_t client = init_client_http(TG_BASE_URL, true);
 
     // Loop long polling requests forever using the same connection
     uint32_t i = 0;
@@ -288,7 +297,7 @@ static void http_request_task(void *pvParameters)
         } else {
             ESP_LOGE(TAG, "HTTP GET request failed: %s", esp_err_to_name(err));
             esp_http_client_cleanup(client);  //clean http client
-            client = init_client_http(TG_BASE_URL);  //init new http client
+            client = init_client_http(TG_BASE_URL, true);  //init new http client
             vTaskDelay(10000 / portTICK_PERIOD_MS);  //backoff time
         }
         i++;
@@ -320,7 +329,7 @@ static void button_press_task(void* arg)
     TickType_t last_tick = xTaskGetTickCount();
     press_info_t info;
     bool http_repeat = false;
-    esp_http_client_handle_t client = init_client_http(TG_BASE_URL);
+    esp_http_client_handle_t client = init_client_http(TG_BASE_URL, false);
 
     // Configure input pin to handle button press
     gpio_config_t io_conf = {
@@ -375,7 +384,7 @@ static void button_press_task(void* arg)
             } else {
                 ESP_LOGE("button task", "HTTP GET request failed: %s", esp_err_to_name(err));
                 esp_http_client_cleanup(client);  //cleanup client
-                client = init_client_http(TG_BASE_URL); //restart client
+                client = init_client_http(TG_BASE_URL, false); //restart client
                 vTaskDelay(3000 / portTICK_PERIOD_MS);  //backoff time
                 xQueueSendToFront(button_press_evt_queue, &info, 0); //put event again in queue
                 http_repeat = true;   //signal that the next event in queue should be repeated (skip timestamp check)
