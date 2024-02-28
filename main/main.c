@@ -52,8 +52,8 @@ static uint32_t offset = 0;  //update_id offset
 #define TG_GET_UPDATES TG_BASE_URL"getUpdates?timeout=58&offset="
 #define SIZEOF_TG_GET_UPDATES_FMT 128
 static char tg_get_updates_fmt[SIZEOF_TG_GET_UPDATES_FMT];
-#define TG_SEND_HEART TG_BASE_URL"sendMessage?chat_id="CONFIG_TG_TARGET_USERID"&text=heart"
-#define TG_SEND_CHICK TG_BASE_URL"sendMessage?chat_id="CONFIG_TG_TARGET_USERID"&text=chicken"
+#define TG_SEND_HEART TG_BASE_URL"sendMessage?chat_id="CONFIG_TG_TARGET_USERID"&text=%E2%9D%A4%EF%B8%8F"
+#define TG_SEND_CHICK TG_BASE_URL"sendMessage?chat_id="CONFIG_TG_TARGET_USERID"&text=%F0%9F%90%94"
 
 /* FreeRTOS event group to signal when we are connected*/
 static EventGroupHandle_t s_wifi_event_group;
@@ -282,12 +282,15 @@ static void http_request_task(void *pvParameters)
     uint32_t i = 0;
     while (true) {
         // Perform a GET
-        ESP_LOGI(TAG, "Request number %d", i+1);
+        ESP_LOGI(TAG, "Request number %d", i);
 
         // Format URL
         memset(tg_get_updates_fmt, 0, SIZEOF_TG_GET_UPDATES_FMT);
         sprintf(tg_get_updates_fmt, TG_GET_UPDATES"%u", offset);
-        esp_http_client_set_url(client, tg_get_updates_fmt);
+        err =  esp_http_client_set_url(client, tg_get_updates_fmt);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "get updates set url failed: %d", esp_err_to_name(err));
+        }
 
         err = esp_http_client_perform(client);
         if (err == ESP_OK) {
